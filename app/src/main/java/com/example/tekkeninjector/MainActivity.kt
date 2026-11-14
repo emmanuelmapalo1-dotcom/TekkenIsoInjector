@@ -40,6 +40,7 @@ class MainActivity : ComponentActivity() {
                     onCustomIdChanged = viewModel::onCustomIdChanged,
                     onAnalyze = viewModel::analyze,
                     onExportIndex = viewModel::exportIndex,
+                    onExportSample = viewModel::exportSample,
                     onCancel = viewModel::cancel,
                 )
             }

@@ -58,6 +58,7 @@ fun InjectorScreen(
     onCustomIdChanged: (String) -> Unit,
     onAnalyze: () -> Unit,
     onExportIndex: (Uri) -> Unit,
+    onExportSample: (Uri) -> Unit,
     onCancel: () -> Unit,
 ) {
     // Storage Access Framework: no storage permission needed on Android 11+.
@@ -73,6 +74,9 @@ fun InjectorScreen(
     val createIndexCopy = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri -> if (uri != null) onExportIndex(uri) }
+    val createSampleCopy = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri -> if (uri != null) onExportSample(uri) }
     val clipboard = LocalClipboardManager.current
 
     Scaffold(topBar = { TopAppBar(title = { Text("Tekken 6 ISO Mod Injector") }) }) { padding ->
@@ -106,6 +110,11 @@ fun InjectorScreen(
                     enabled = state.canAnalyze,
                     modifier = Modifier.weight(1f),
                 ) { Text("Export IDX") }
+                OutlinedButton(
+                    onClick = { createSampleCopy.launch("bulk_sample.bin") },
+                    enabled = state.canAnalyze,
+                    modifier = Modifier.weight(1f),
+                ) { Text("Raw sample") }
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {

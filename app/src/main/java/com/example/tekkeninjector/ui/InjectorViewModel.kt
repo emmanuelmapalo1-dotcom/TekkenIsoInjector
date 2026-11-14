@@ -105,6 +105,11 @@ class InjectorViewModel(app: Application) : AndroidViewModel(app) {
         launchJob(deletesOutput = true) { progress -> engine.exportIndex(iso, outUri, this@InjectorViewModel::appendLog, progress) }
     }
 
+    fun exportSample(outUri: Uri) {
+        val iso = _state.value.isoUri ?: return
+        launchJob(deletesOutput = true) { progress -> engine.exportRegionSample(iso, outUri, this@InjectorViewModel::appendLog, progress) }
+    }
+
     fun cancel() {
         job?.cancel()
     }

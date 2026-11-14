@@ -11,6 +11,7 @@ import com.example.tekkeninjector.iso.IsoPatcher
 import com.example.tekkeninjector.iso.IsoSource
 import com.example.tekkeninjector.iso.Replacement
 import com.example.tekkeninjector.iso.SECTOR_SIZE
+import com.example.tekkeninjector.iso.sectorsFor
 import com.example.tekkeninjector.mod.ModArchive
 import com.example.tekkeninjector.mod.ModMatcher
 import com.example.tekkeninjector.mod.ModSlotParser
@@ -119,6 +120,43 @@ class InjectorEngine(private val context: Context) {
                         }
                     }
                     log("Exported ${idx.size} bytes. Keep this file as-is; it is a byte-exact copy.")
+                }
+                ok = true
+                progress(1f, "Export done")
+            } finally {
+                if (!ok) deleteQuietly(outUri)
+            }
+        }
+
+    // ---------------------------------------------------------------------------------------
+    // Export the first 1 MiB of the raw (unreferenced) region that follows the index
+    // ---------------------------------------------------------------------------------------
+
+    suspend fun exportRegionSample(isoUri: Uri, outUri: Uri, log: (String) -> Unit, progress: (Float, String) -> Unit) =
+        withContext(Dispatchers.IO) {
+            require(outUri != isoUri) { "The output file must be different from the base ISO." }
+            var ok = false
+            try {
+                progress(0.1f, "Exporting raw sample")
+                val pfd = context.contentResolver.openFileDescriptor(isoUri, "r")
+                    ?: throw IOException("Cannot open the base ISO")
+                ParcelFileDescriptor.AutoCloseInputStream(pfd).use { input ->
+                    val source = IsoSource(input.channel)
+                    val image = IsoImage.open(source)
+                    val entries = image.listEntries()
+                    val regions = ArchiveProbe.unreferencedRegions(source, image, entries)
+                    if (regions.isEmpty()) throw IOException("This ISO has no large unreferenced disc region")
+                    val idx = ArchiveProbe.findIndex(entries.filter { !it.isDirectory })
+                    val afterIdx = idx?.let { it.lba + sectorsFor(it.size) }
+                    val region = regions.firstOrNull { it.first == afterIdx }
+                        ?: regions.maxByOrNull { it.last - it.first }!!
+                    val bytes = minOf((region.last - region.first + 1) * SECTOR_SIZE, 1L shl 20).toInt()
+                    log("Exporting $bytes bytes from the raw region starting at LBA ${region.first}...")
+                    val buf = source.read(region.first * SECTOR_SIZE, ByteArray(bytes))
+                    val out = context.contentResolver.openOutputStream(outUri, "wt")
+                        ?: throw IOException("Cannot open the output file")
+                    out.use { it.write(buf) }
+                    log("Exported $bytes bytes (byte-exact copy of disc sectors starting at LBA ${region.first}).")
                 }
                 ok = true
                 progress(1f, "Export done")

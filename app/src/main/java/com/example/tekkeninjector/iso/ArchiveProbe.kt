@@ -67,23 +67,22 @@ object ArchiveProbe {
         others.forEach { log("  other container-like file: ${it.path}  ${it.size} B @ LBA ${it.lba}") }
 
         // Disc regions that no ISO-9660 record points at (raw data can live there).
-        val extents = allEntries.filter { it.size > 0 }
-            .map { it.lba to it.lba + sectorsFor(it.size) }
-            .sortedBy { it.first }
-        val gaps = ArrayList<LongRange>()
-        var cursor = 18L // system area + volume descriptors
-        for ((s, e) in extents) {
-            if (s - cursor >= GAP_SECTORS) gaps += cursor until s
-            if (e > cursor) cursor = e
-        }
-        val total = maxOf(image.pvd.volumeSpaceSectors, sectorsFor(source.length))
-        if (total - cursor >= GAP_SECTORS) gaps += cursor until total
+        val gaps = unreferencedRegions(source, image, allEntries)
         if (gaps.isEmpty()) {
             log("No large unreferenced disc regions (everything is reachable through ISO-9660 files)")
         } else {
             gaps.take(8).forEach {
                 val n = it.last - it.first + 1
                 log("Unreferenced disc region: LBA ${it.first}..${it.last} (${n * SECTOR_SIZE / (1024 * 1024)} MB) - may hold raw data outside the file system")
+            }
+        }
+
+        gaps.take(4).forEach { analyzeRegion(source, it, log) }
+        if (index != null) {
+            val afterIdx = index.lba + sectorsFor(index.size)
+            gaps.firstOrNull { it.first == afterIdx }?.let {
+                val mb = (it.last - it.first + 1) * SECTOR_SIZE / (1024 * 1024)
+                log("The region starting at LBA ${it.first} (${mb} MB) begins right after the index: most likely the bulk data, addressed by raw sector")
             }
         }
 
@@ -95,6 +94,41 @@ object ArchiveProbe {
         log("IDX entries parsed: n/a - the record layout is not decoded by this build; only the raw statistics above were collected")
         log("--- end of probe ---")
         return Result(index, bulk, gaps, indexEncrypted)
+    }
+
+    /** Disc regions (>= 1 MiB) that no ISO-9660 record points at. */
+    fun unreferencedRegions(source: IsoSource, image: IsoImage, allEntries: List<IsoEntry>): List<LongRange> {
+        val extents = allEntries.filter { it.size > 0 }
+            .map { it.lba to it.lba + sectorsFor(it.size) }
+            .sortedBy { it.first }
+        val gaps = ArrayList<LongRange>()
+        var cursor = 18L // system area + volume descriptors
+        for ((s, e) in extents) {
+            if (s - cursor >= GAP_SECTORS) gaps += cursor until s
+            if (e > cursor) cursor = e
+        }
+        val total = maxOf(image.pvd.volumeSpaceSectors, sectorsFor(source.length))
+        if (total - cursor >= GAP_SECTORS) gaps += cursor until total
+        return gaps
+    }
+
+    private fun analyzeRegion(source: IsoSource, r: LongRange, log: (String) -> Unit) {
+        val sectors = r.last - r.first + 1
+        val n = minOf(sectors * SECTOR_SIZE, BULK_SAMPLE.toLong()).toInt()
+        val head = source.read(r.first * SECTOR_SIZE, ByteArray(n))
+        val zeroPct = head.count { it.toInt() == 0 } * 100 / maxOf(n, 1)
+        val h = entropy(head, n)
+        log("Region LBA ${r.first}: first 32 bytes: ${hex(head, 32)}")
+        log("  first ${n / 1024} KB: entropy ${String.format(Locale.US, "%.2f", h)} bits/byte, ${zeroPct}% zero bytes" +
+            when {
+                h > 7.5 -> " (looks encrypted or compressed)"
+                zeroPct > 90 -> " (mostly empty)"
+                else -> " (looks like plain structured data)"
+            })
+        if (sectors * SECTOR_SIZE > 8L * 1024 * 1024) {
+            val mid = source.read((r.first + sectors / 2) * SECTOR_SIZE, ByteArray(BULK_SAMPLE))
+            log("  middle 256 KB: entropy ${String.format(Locale.US, "%.2f", entropy(mid, mid.size))} bits/byte")
+        }
     }
 
     private fun analyzeIndex(source: IsoSource, e: IsoEntry, log: (String) -> Unit, check: () -> Unit): Boolean {
